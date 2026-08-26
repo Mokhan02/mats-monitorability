@@ -29,6 +29,7 @@ def encode_chat(tokenizer, prompt: str, device) -> dict[str, torch.Tensor]:
     messages = [{"role": "user", "content": prompt}]
     encoded = tokenizer.apply_chat_template(
         messages, add_generation_prompt=True, return_tensors="pt", return_dict=True,
+        enable_thinking=False,
     )
     return {k: v.to(device) for k, v in encoded.items()}
 
