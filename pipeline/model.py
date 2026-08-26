@@ -6,11 +6,15 @@ DEFAULT_MODEL = "Qwen/Qwen3-8B"
 
 def load_model(model_name: str = DEFAULT_MODEL):
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype=torch.bfloat16,
-        device_map="auto",
-    )
+    try:
+        # transformers >=5 renamed this kwarg from torch_dtype to dtype.
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name, dtype=torch.bfloat16, device_map="auto",
+        )
+    except TypeError:
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name, torch_dtype=torch.bfloat16, device_map="auto",
+        )
     model.eval()
     return model, tokenizer
 
