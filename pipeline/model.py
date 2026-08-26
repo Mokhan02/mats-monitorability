@@ -19,6 +19,18 @@ def load_model(model_name: str = DEFAULT_MODEL):
     return model, tokenizer
 
 
+def encode_chat(tokenizer, prompt: str, device) -> dict[str, torch.Tensor]:
+    """apply_chat_template's return shape is version-sensitive (raw tensor vs.
+    a BatchEncoding dict) depending on transformers version; return_dict=True
+    pins it to the dict form so callers can always **kwargs it into the model.
+    """
+    messages = [{"role": "user", "content": prompt}]
+    encoded = tokenizer.apply_chat_template(
+        messages, add_generation_prompt=True, return_tensors="pt", return_dict=True,
+    )
+    return {k: v.to(device) for k, v in encoded.items()}
+
+
 def decoder_layer(model, layer_idx: int):
     """hidden_states[l] from output_hidden_states is the residual stream *after*
     decoder block (l-1); hidden_states[0] is the embedding output. So the hook
