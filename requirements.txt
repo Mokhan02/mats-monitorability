@@ -4,3 +4,4 @@ accelerate>=0.33
 scikit-learn>=1.4
 numpy<2
 Pillow>=10
+Jinja2>=3.1
