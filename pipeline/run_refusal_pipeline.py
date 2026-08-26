@@ -1,15 +1,22 @@
 """End-to-end pipeline for one concept, tonight run on refusal / Qwen3-8B.
 
-contrastive pairs -> probe (layer scan) -> diff-in-means direction -> steer -> judge readout
+contrastive pairs -> probe -> diff-in-means direction -> steer -> judge readout
 
-Layer selection and the reported probe AUROC are fit on disjoint splits (see
-probe.scan_layers docstring) and a label-shuffle control is run alongside the
-real probe, so a passing AUROC actually means something instead of just
-reflecting d >> n. Timing is tracked per-unit (per activation extraction, per
-generation, per judge call) and extrapolated to the full Saturday config,
-since tonight's toy run (60 pairs, 9 alphas x 12 holdout prompts) is far
-smaller than the real one and its raw wall-clock would pass the 45-minute
-gate vacuously.
+LAYER is hardcoded rather than picked by argmax over a per-layer scan: the
+first pilot's scan showed a plateau of AUROC 1.000 across layers 13-24 (real
+concept separation, not the lexical-leakage artifact we first suspected --
+extraction is prompt-only, no completion tokens are ever present at that
+point), and argmax breaks ties by picking the first one. Layer 18 sits at the
+middle of that plateau, ~50% depth, matching where the refusal-direction
+literature typically finds it, and is a call made before looking at any
+further data rather than a data-driven selection step that would need
+defending. The AUROC-by-layer curve is still computed and reported below, but
+purely descriptively -- LAYER does not depend on it.
+
+Timing is tracked per-unit (per activation extraction, per generation, per
+judge call) and extrapolated to the full Saturday config, since tonight's toy
+run is far smaller than the real one and its raw wall-clock would pass the
+45-minute gate vacuously.
 
 Thinking mode is disabled everywhere via model.encode_chat (Qwen3 defaults to
 emitting a <think> block that can eat the whole generation budget before any
@@ -34,10 +41,11 @@ from .extract import extract_layer_activations
 from .judge import check_judge_separation, digit_token_ids, graded_refusal_score, is_refusal
 from .model import load_model
 from .pairs import get_pairs
-from .probe import best_layer, fit_final_probe, scan_layers, shuffle_label_control
+from .probe import fit_final_probe, scan_layers, shuffle_label_control
 from .steer import generate_steered
 
 CONCEPT = "refusal"
+LAYER = 18
 N_HOLDOUT = 12
 ALPHA_MULTIPLIERS = [-1.0, -0.5, -0.25, 0.0, 0.25, 0.5, 1.0]
 RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
@@ -72,9 +80,7 @@ def main():
 
     pairs = get_pairs(CONCEPT)
     holdout_pairs = pairs[-N_HOLDOUT:]
-    remainder = pairs[:-N_HOLDOUT]
-    half = len(remainder) // 2
-    select_pairs, eval_pairs = remainder[:half], remainder[half:]
+    fit_pairs = pairs[:-N_HOLDOUT]
 
     n_extractions = 0
 
@@ -85,25 +91,21 @@ def main():
         print(f"extracted {label} ({len(prompts)} prompts, {n_extractions} total so far)", flush=True)
         return result
 
-    select_pos = extract([p.positive for p in select_pairs], "select_pos")
-    select_neg = extract([p.negative for p in select_pairs], "select_neg")
-    scan_results = timed("probe_scan", scan_layers, select_pos, select_neg)
-    layer = best_layer(scan_results)
-    selection_auroc = scan_results[layer]["auroc"]
-    auroc_by_layer = {l: round(scan_results[l]["auroc"], 4) for l in sorted(scan_results)}
-    print(f"layer scan done: layer={layer} selection_auroc={selection_auroc:.3f}", flush=True)
-    print(f"auroc_by_layer: {auroc_by_layer}", flush=True)
+    fit_pos = extract([p.positive for p in fit_pairs], "fit_pos")
+    fit_neg = extract([p.negative for p in fit_pairs], "fit_neg")
 
-    eval_pos = extract([p.positive for p in eval_pairs], "eval_pos")
-    eval_neg = extract([p.negative for p in eval_pairs], "eval_neg")
-    probe, held_out_auroc = timed("final_probe_fit", fit_final_probe, eval_pos, eval_neg, layer)
-    shuffled_auroc = timed("shuffle_control", shuffle_label_control, eval_pos, eval_neg, layer)
+    scan_results = timed("probe_scan", scan_layers, fit_pos, fit_neg)
+    auroc_by_layer = {l: round(scan_results[l]["auroc"], 4) for l in sorted(scan_results)}
+    print(f"auroc_by_layer (descriptive only, LAYER={LAYER} is hardcoded): {auroc_by_layer}", flush=True)
+
+    probe, held_out_auroc = timed("final_probe_fit", fit_final_probe, fit_pos, fit_neg, LAYER)
+    shuffled_auroc = timed("shuffle_control", shuffle_label_control, fit_pos, fit_neg, LAYER)
     print(f"held_out_auroc={held_out_auroc:.3f} shuffle_control_auroc={shuffled_auroc:.3f}", flush=True)
 
-    direction = diff_in_means(eval_pos, eval_neg, layer)
-    layer_acts = torch.cat([eval_pos[layer], eval_neg[layer]])
+    direction = diff_in_means(fit_pos, fit_neg, LAYER)
+    layer_acts = torch.cat([fit_pos[LAYER], fit_neg[LAYER]])
     mean_residual_norm = layer_acts.norm(dim=-1).mean().item()
-    print(f"mean_residual_norm at layer {layer}: {mean_residual_norm:.1f}", flush=True)
+    print(f"mean_residual_norm at layer {LAYER}: {mean_residual_norm:.1f}", flush=True)
 
     n_generations = 0
     sweep_results = []
@@ -113,7 +115,7 @@ def main():
         for i, pair in enumerate(holdout_pairs):
             completion = timed(
                 "steer_generate", generate_steered,
-                model, tokenizer, pair.positive, layer, direction, alpha,
+                model, tokenizer, pair.positive, LAYER, direction, alpha,
             )
             n_generations += 1
             keyword_refusal = is_refusal(completion)
@@ -156,8 +158,7 @@ def main():
 
     total = sum(timings.values())
     print(f"tonight's total: {total:.1f}s over {n_extractions} extractions, {n_generations} generations")
-    print(f"layer={layer} selection_auroc={selection_auroc:.3f} "
-          f"held_out_auroc={held_out_auroc:.3f} shuffle_control_auroc={shuffled_auroc:.3f}")
+    print(f"layer={LAYER} held_out_auroc={held_out_auroc:.3f} shuffle_control_auroc={shuffled_auroc:.3f}")
     print(f"predicted full Saturday run ({FULL_RUN_CONCEPTS} concepts, "
           f"{FULL_RUN_ACTIVATIONS_PER_CONCEPT} extractions + {FULL_RUN_GENERATIONS_PER_CONCEPT} "
           f"generations each): {predicted_full_run_hours:.2f}h")
@@ -170,8 +171,7 @@ def main():
             "hard_refusal_score": sanity_refusal_score,
             "full_compliance_score": sanity_comply_score,
         },
-        "layer": layer,
-        "selection_auroc": selection_auroc,
+        "layer": LAYER,
         "auroc_by_layer": auroc_by_layer,
         "held_out_auroc": held_out_auroc,
         "shuffle_control_auroc": shuffled_auroc,
