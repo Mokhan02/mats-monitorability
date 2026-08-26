@@ -46,6 +46,7 @@ def main():
         return result
 
     model, tokenizer = timed("load_model", load_model)
+    print("model loaded", flush=True)
 
     pairs = get_pairs(CONCEPT)
     holdout_pairs = pairs[-N_HOLDOUT:]
@@ -55,21 +56,25 @@ def main():
 
     n_extractions = 0
 
-    def extract(prompts):
+    def extract(prompts, label):
         nonlocal n_extractions
         n_extractions += len(prompts)
-        return timed("extract_activations", extract_layer_activations, model, tokenizer, prompts)
+        result = timed("extract_activations", extract_layer_activations, model, tokenizer, prompts)
+        print(f"extracted {label} ({len(prompts)} prompts, {n_extractions} total so far)", flush=True)
+        return result
 
-    select_pos = extract([p.positive for p in select_pairs])
-    select_neg = extract([p.negative for p in select_pairs])
+    select_pos = extract([p.positive for p in select_pairs], "select_pos")
+    select_neg = extract([p.negative for p in select_pairs], "select_neg")
     scan_results = timed("probe_scan", scan_layers, select_pos, select_neg)
     layer = best_layer(scan_results)
     selection_auroc = scan_results[layer]["auroc"]
+    print(f"layer scan done: layer={layer} selection_auroc={selection_auroc:.3f}", flush=True)
 
-    eval_pos = extract([p.positive for p in eval_pairs])
-    eval_neg = extract([p.negative for p in eval_pairs])
+    eval_pos = extract([p.positive for p in eval_pairs], "eval_pos")
+    eval_neg = extract([p.negative for p in eval_pairs], "eval_neg")
     probe, held_out_auroc = timed("final_probe_fit", fit_final_probe, eval_pos, eval_neg, layer)
     shuffled_auroc = timed("shuffle_control", shuffle_label_control, eval_pos, eval_neg, layer)
+    print(f"held_out_auroc={held_out_auroc:.3f} shuffle_control_auroc={shuffled_auroc:.3f}", flush=True)
 
     direction = diff_in_means(eval_pos, eval_neg, layer)
 
@@ -78,7 +83,7 @@ def main():
     sweep_results = []
     for alpha in ALPHA_SWEEP:
         keyword_flags, graded_scores, examples = [], [], []
-        for pair in holdout_pairs:
+        for i, pair in enumerate(holdout_pairs):
             completion = timed(
                 "steer_generate", generate_steered,
                 model, tokenizer, pair.positive, layer, direction, alpha,
@@ -97,6 +102,8 @@ def main():
                 "keyword_refusal": keyword_refusal,
                 "graded_refusal_score": graded_score,
             })
+            print(f"alpha={alpha} [{i + 1}/{len(holdout_pairs)}] "
+                  f"keyword_refusal={keyword_refusal} graded={graded_score:.2f}", flush=True)
 
         agreement = sum(
             kw == (score >= 0.5) for kw, score in zip(keyword_flags, graded_scores)
@@ -108,6 +115,8 @@ def main():
             "judge_agreement_rate": agreement,
             "examples": examples,
         })
+        print(f"alpha={alpha} done: keyword_refusal_rate={sweep_results[-1]['keyword_refusal_rate']:.2f} "
+              f"mean_graded_refusal_score={sweep_results[-1]['mean_graded_refusal_score']:.2f}", flush=True)
 
     time_per_extraction = timings["extract_activations"] / n_extractions
     time_per_generation = timings["steer_generate"] / n_generations

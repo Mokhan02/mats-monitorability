@@ -16,6 +16,8 @@ def load_model(model_name: str = DEFAULT_MODEL):
             model_name, torch_dtype=torch.bfloat16, device_map="auto",
         )
     model.eval()
+    devices = {p.device for p in model.parameters()}
+    print(f"cuda available: {torch.cuda.is_available()}; model device(s): {devices}")
     return model, tokenizer
 
 
