@@ -85,7 +85,9 @@ def _score_one(text, concept, retries=3):
             m = re.search(r"\d+", r.content[0].text)
             if m:
                 return min(int(m.group()), 10) / 10.0
-        except Exception:
+            print(f"api_judge: no digit found in response: {r.content[0].text!r}")
+        except Exception as e:
+            print(f"api_judge: attempt {attempt + 1}/{retries} failed: {type(e).__name__}: {e}")
             time.sleep(2 ** attempt)
     return None
 
