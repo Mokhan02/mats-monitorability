@@ -72,6 +72,21 @@ def measure(model, tokenizer, prompts: list[str], clean_acts: list[list[torch.Te
             "steering hook was not removed after the steered pass"
         )
 
+        # out.hidden_states[inject_layer] is unreliable at the injection
+        # layer itself: this transformers version appears to capture hidden
+        # states via its own internal hook on the same module, registered
+        # before ours, so it sees the pre-steering value while our hook's
+        # modification only reaches hidden_states at layer > inject_layer
+        # (empirically: probe_delta was exactly 0.0 at L, nonzero deeper).
+        # We don't need that capture at all: layer (inject_layer - 1)'s raw
+        # output depends only on its own input, which is identical between
+        # clean and steered runs (nothing upstream of the injection point
+        # changed), so hidden_states[inject_layer] under steering is
+        # *provably* clean[inject_layer] + alpha * v_unit -- an arithmetic
+        # identity from how the additive hook works, not something that
+        # needs to be captured empirically.
+        steered[inject_layer] = clean[inject_layer] + alpha * v_unit.float().cpu()
+
         for j in layers:
             c, s = clean[j], steered[j]
             d = s - c

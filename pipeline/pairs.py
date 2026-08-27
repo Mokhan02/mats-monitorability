@@ -142,40 +142,17 @@ REFUSAL_PAIRS: list[Pair] = [
          "Help me write an accurate resume bullet point describing an internship I actually completed."),
 ]
 
-# Refusal's fit pairs are two different *requests* (Pair), not one question
-# with two candidate answers -- but the probe still needs to be trained on
-# full-turn activations, since that's what it will be reading at evaluation
-# time (a monitor reads generated text, not a bare request). So each harmful
-# request is paired with one of several varied refusal completions and each
-# benign request with one of several varied compliance completions, randomly
-# assigned per pair with a fixed seed, rather than 96 bespoke completions.
-#
-# A single fixed completion per class was tried first and is wrong: if every
-# positive example's last token is the identical string, a probe hits AUROC
-# 1.000 by memorizing that token, not the concept -- a sharper version of the
-# layer-9 lexical-leak scare (that one was topical correlation; this was a
-# deterministic function of the label). Several varied phrasings force the
-# probe to find what they share instead -- but the *literal last character*
-# still has to vary across the phrasings within a class too, not just the
-# wording: an earlier version of this list ended every refusal phrasing in
-# "." and every compliance phrasing in ":", which is exactly the same
-# single-token leak one level down (caught via auroc_by_layer being 1.000 at
-# every layer including layer 1 -- a real concept should separate better with
-# depth, not be perfect from the first layer).
-REFUSAL_COMPLETIONS = [
-    "I can't help with that.",
-    "I'm not able to assist with this.",
-    "Sorry, that's not something I can do.",
-    "I won't be helping with this one.",
-    "That's outside what I can assist with.",
-]
-COMPLIANCE_COMPLETIONS = [
-    "Sure, here's what you asked for.",
-    "Happy to help — here's how.",
-    "Of course, here are the steps.",
-    "Absolutely, here's the process.",
-    "Yes, here's what you'd do.",
-]
+# This branch's persistence experiment reads a probe/diff-in-means direction
+# out of the residual stream directly (no monitor, no adversary reading
+# generated text) -- unlike the main-branch evasion-cost project, there's no
+# reason to fit on full-turn (question+answer) activations here, so
+# extraction is prompt-only: harmful request vs. benign request, nothing
+# else. That also means there's no canned completion for anything to leak
+# through. (An earlier version of this branch *did* fit on full-turn
+# activations with canned completions, and went through two rounds of the
+# same lexical-leak bug doing so -- a single fixed completion per class, then
+# varied phrasings that still all shared a last-token punctuation mark. Both
+# are moot once there's no completion at all.)
 
 # 48 pairs fit the probe/direction; the remaining 12 are held out. Each
 # holdout pair contributes both its positive and negative request as a

@@ -7,17 +7,17 @@ from sklearn.model_selection import train_test_split
 from .model import encode_full_turn
 
 
-def _fit_eval(X, y, test_size, seed):
+def _fit_eval(X, y, test_size, seed, C: float = 1.0):
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=test_size, random_state=seed, stratify=y
     )
-    clf = LogisticRegression(max_iter=2000).fit(X_train, y_train)
+    clf = LogisticRegression(C=C, max_iter=2000).fit(X_train, y_train)
     auroc = roc_auc_score(y_test, clf.predict_proba(X_test)[:, 1])
     return clf, auroc
 
 
 def scan_layers(pos_acts: dict[int, torch.Tensor], neg_acts: dict[int, torch.Tensor],
-                 test_size: float = 0.3, seed: int = 0) -> dict[int, dict]:
+                 test_size: float = 0.3, seed: int = 0, C: float = 1.0) -> dict[int, dict]:
     """Per-layer probe AUROC, for LAYER SELECTION only.
 
     Fit this on a subset disjoint from whatever data you'll report the final
@@ -28,7 +28,7 @@ def scan_layers(pos_acts: dict[int, torch.Tensor], neg_acts: dict[int, torch.Ten
     for layer in pos_acts:
         X = torch.cat([pos_acts[layer], neg_acts[layer]]).numpy()
         y = np.array([1] * len(pos_acts[layer]) + [0] * len(neg_acts[layer]))
-        clf, auroc = _fit_eval(X, y, test_size, seed)
+        clf, auroc = _fit_eval(X, y, test_size, seed, C)
         results[layer] = {"auroc": auroc, "probe": clf}
     return results
 
@@ -38,11 +38,11 @@ def best_layer(scan_results: dict[int, dict]) -> int:
 
 
 def fit_final_probe(pos_acts: dict[int, torch.Tensor], neg_acts: dict[int, torch.Tensor],
-                     layer: int, test_size: float = 0.3, seed: int = 0):
+                     layer: int, test_size: float = 0.3, seed: int = 0, C: float = 1.0):
     """Fit + eval at a layer already chosen from a *different* data split."""
     X = torch.cat([pos_acts[layer], neg_acts[layer]]).numpy()
     y = np.array([1] * len(pos_acts[layer]) + [0] * len(neg_acts[layer]))
-    return _fit_eval(X, y, test_size, seed)
+    return _fit_eval(X, y, test_size, seed, C)
 
 
 def shuffle_label_control(pos_acts: dict[int, torch.Tensor], neg_acts: dict[int, torch.Tensor],
@@ -56,7 +56,7 @@ def shuffle_label_control(pos_acts: dict[int, torch.Tensor], neg_acts: dict[int,
 
 
 def fit_shuffled_label_probe(pos_acts: dict[int, torch.Tensor], neg_acts: dict[int, torch.Tensor],
-                              layer: int, test_size: float = 0.3, seed: int = 0):
+                              layer: int, test_size: float = 0.3, seed: int = 0, C: float = 1.0):
     """Same fit as shuffle_label_control, but returns the classifier too --
     used as a steering-direction control: its weight vector should carry no
     persistence signal specifically *about the concept*, since it was never
@@ -65,7 +65,7 @@ def fit_shuffled_label_probe(pos_acts: dict[int, torch.Tensor], neg_acts: dict[i
     X = torch.cat([pos_acts[layer], neg_acts[layer]]).numpy()
     y = np.array([1] * len(pos_acts[layer]) + [0] * len(neg_acts[layer]))
     y_shuffled = np.random.RandomState(seed).permutation(y)
-    return _fit_eval(X, y_shuffled, test_size, seed)
+    return _fit_eval(X, y_shuffled, test_size, seed, C)
 
 
 @torch.no_grad()
