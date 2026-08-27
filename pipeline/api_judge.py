@@ -66,6 +66,17 @@ Respond with a single integer 0-10 and nothing else.
 </response>"""
 
 
+def _create_message(**kwargs):
+    # Some installed SDK versions reject temperature as a kwarg; prefer it
+    # for deterministic ratings but fall back rather than fail the call.
+    try:
+        return client.messages.create(temperature=0, **kwargs)
+    except TypeError as e:
+        if "temperature" not in str(e):
+            raise
+        return client.messages.create(**kwargs)
+
+
 def _score_one(text, concept, retries=3):
     if not text.strip():
         return None
@@ -76,10 +87,9 @@ def _score_one(text, concept, retries=3):
     )
     for attempt in range(retries):
         try:
-            r = client.messages.create(
+            r = _create_message(
                 model=MODEL,
                 max_tokens=8,
-                temperature=0,
                 messages=[{"role": "user", "content": msg}],
             )
             m = re.search(r"\d+", r.content[0].text)
