@@ -36,6 +36,7 @@ injection layer, at several C values -- vary in regularization.
 """
 
 import json
+import statistics
 import time
 from pathlib import Path
 
@@ -49,7 +50,14 @@ from .pairs import REFUSAL_FIT_PAIRS, REFUSAL_HOLDOUT_PROMPTS
 from .persistence import clean_activations, measure
 from .probe import fit_final_probe, fit_shuffled_label_probe, scan_layers
 
-MODEL = "Qwen/Qwen3-8B"
+# Replication target. Qwen3-14B: same family as the first run (Qwen3-8B), so
+# zero new integration risk (chat template, thinking-mode handling, standard
+# model.model.layers indexing all already proven to work), while still
+# testing whether the result holds at a different scale. Weaker as an
+# *independent* replication than a cross-family model (Gemma 3, Llama) would
+# be -- swap MODEL to one of those for that, once this one's result is in.
+MODEL = "Qwen/Qwen3-14B"
+MODEL_SLUG = MODEL.replace("/", "_")
 INJECT_LAYERS = [12, 18, 24]
 # Multiples of the layer's mean residual norm. +-1.0 produced degenerate
 # output in earlier work on this project; don't use it.
@@ -60,7 +68,12 @@ N_PROMPTS = 24  # both sides of the 12 held-out refusal pairs
 # weak regularization -> expect lower cos, more idiosyncratic direction.
 PROBE_C_VALUES = [0.001, 0.01, 0.1, 1, 10, 100]
 
-SHUFFLE_LABEL_SEED = 0
+# Single draws of shuffle_label_control_auroc came back consistently below
+# 0.5 (0.271/0.333/0.438 across the three injection layers) -- draw many
+# permutations and look at the mean/spread instead of trusting one draw at
+# n~29 (30% test split of 96 fit examples).
+N_SHUFFLE_DRAWS = 20
+SHUFFLE_LABEL_SEED = 0  # seed used for the ONE draw kept as a steering vector
 RANDOM_DIRECTION_SEED_BASE = 0  # actual seed used is this + inject_layer
 
 RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
@@ -88,8 +101,8 @@ def main():
         f"expected {N_PROMPTS} held-out prompts, got {len(REFUSAL_HOLDOUT_PROMPTS)}"
     )
 
-    model, tokenizer = load_model()
-    print("model loaded", flush=True)
+    model, tokenizer = load_model(MODEL)
+    print(f"model loaded: {MODEL}", flush=True)
 
     fit_pos, fit_neg = _extract_fit_activations(model, tokenizer)
 
@@ -132,12 +145,24 @@ def main():
               f"(cos={decomp['cos']:.3f}, orthogonal_norm_fraction={decomp['orthogonal_norm_fraction']:.3f})",
               flush=True)
 
-        shuffled_clf, shuffled_auroc = fit_shuffled_label_probe(
-            fit_pos, fit_neg, L, seed=SHUFFLE_LABEL_SEED,
-        )
+        # Many draws, not one: a single permutation's AUROC at n~29 (30% test
+        # split of 96) is noisy enough that a below-0.5 reading alone doesn't
+        # tell you whether that's just variance or a real leak in the split.
+        shuffle_aurocs = [
+            fit_shuffled_label_probe(fit_pos, fit_neg, L, seed=s)[1]
+            for s in range(N_SHUFFLE_DRAWS)
+        ]
+        shuffle_auroc_mean = statistics.mean(shuffle_aurocs)
+        shuffle_auroc_std = statistics.pstdev(shuffle_aurocs)
+        print(f"[L={L}] shuffle_label_control_auroc over {N_SHUFFLE_DRAWS} draws: "
+              f"mean={shuffle_auroc_mean:.3f} std={shuffle_auroc_std:.3f} "
+              f"(want mean near 0.5; a mean near the single-draw values with tight "
+              f"std would mean a real leak, not noise)", flush=True)
+
+        # One specific draw's classifier still needed as an actual steering
+        # vector for the "shuffle_label" condition below.
+        shuffled_clf, _ = fit_shuffled_label_probe(fit_pos, fit_neg, L, seed=SHUFFLE_LABEL_SEED)
         shuffled_vec = torch.tensor(shuffled_clf.coef_[0], dtype=torch.float32)
-        print(f"[L={L}] shuffle_label_control_auroc={shuffled_auroc:.3f} "
-              f"(sanity: should sit near 0.5)", flush=True)
 
         random_vec = _random_direction(dim_vec.shape[0], seed=RANDOM_DIRECTION_SEED_BASE + L)
 
@@ -160,7 +185,7 @@ def main():
         print(f"[L={L}] done in {elapsed:.1f}s", flush=True)
 
         RESULTS_DIR.mkdir(exist_ok=True)
-        out_path = RESULTS_DIR / f"persistence_L{L}.json"
+        out_path = RESULTS_DIR / f"persistence_{MODEL_SLUG}_L{L}.json"
         out_path.write_text(json.dumps({
             "model": MODEL,
             "inject_layer": L,
@@ -171,7 +196,9 @@ def main():
             "cos_by_C": {str(c): cos for c, cos in c_cos.items()},
             "least_collinear_C": least_collinear_C,
             "orthogonal_norm_fraction": decomp["orthogonal_norm_fraction"],
-            "shuffle_label_control_auroc": shuffled_auroc,
+            "shuffle_label_control_auroc_draws": shuffle_aurocs,
+            "shuffle_label_control_auroc_mean": shuffle_auroc_mean,
+            "shuffle_label_control_auroc_std": shuffle_auroc_std,
             "mean_residual_norm": mean_residual_norm,
             "conditions": conditions_result,
         }, indent=2))
