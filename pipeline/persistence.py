@@ -54,14 +54,23 @@ def measure(model, tokenizer, prompts: list[str], clean_acts: list[list[torch.Te
     hook_module = decoder_layer(model, inject_layer)
 
     for prompt, clean in zip(prompts, clean_acts):
-        assert len(hook_module._forward_hooks) == 0, "hook already attached before steered pass"
+        # Baseline, not zero: device_map="auto" (accelerate) can leave its own
+        # device-dispatch hooks on every module regardless of this being a
+        # single-GPU run, so asserting an absolute count of 0 is wrong. What
+        # matters is that *our* steering hook is added then fully removed.
+        baseline_hooks = len(hook_module._forward_hooks)
 
         encoded = encode_chat(tokenizer, prompt, model.device)
         with apply_steering(model, inject_layer, v_unit, alpha):
+            assert len(hook_module._forward_hooks) == baseline_hooks + 1, (
+                "steering hook did not register as expected"
+            )
             out = model(**encoded, output_hidden_states=True)
         steered = [hs[0, -1, :].float().cpu() for hs in out.hidden_states]
 
-        assert len(hook_module._forward_hooks) == 0, "hook not removed after steered pass"
+        assert len(hook_module._forward_hooks) == baseline_hooks, (
+            "steering hook was not removed after the steered pass"
+        )
 
         for j in layers:
             c, s = clean[j], steered[j]

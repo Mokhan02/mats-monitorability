@@ -155,7 +155,13 @@ REFUSAL_PAIRS: list[Pair] = [
 # 1.000 by memorizing that token, not the concept -- a sharper version of the
 # layer-9 lexical-leak scare (that one was topical correlation; this was a
 # deterministic function of the label). Several varied phrasings force the
-# probe to find what they share instead.
+# probe to find what they share instead -- but the *literal last character*
+# still has to vary across the phrasings within a class too, not just the
+# wording: an earlier version of this list ended every refusal phrasing in
+# "." and every compliance phrasing in ":", which is exactly the same
+# single-token leak one level down (caught via auroc_by_layer being 1.000 at
+# every layer including layer 1 -- a real concept should separate better with
+# depth, not be perfect from the first layer).
 REFUSAL_COMPLETIONS = [
     "I can't help with that.",
     "I'm not able to assist with this.",
@@ -164,11 +170,11 @@ REFUSAL_COMPLETIONS = [
     "That's outside what I can assist with.",
 ]
 COMPLIANCE_COMPLETIONS = [
-    "Sure, here's what you asked for:",
-    "Happy to help — here's how:",
-    "Of course. The steps are:",
-    "Absolutely, here's the process:",
-    "Yes — here's what you'd do:",
+    "Sure, here's what you asked for.",
+    "Happy to help — here's how.",
+    "Of course, here are the steps.",
+    "Absolutely, here's the process.",
+    "Yes, here's what you'd do.",
 ]
 
 # 48 pairs fit the probe/direction; the remaining 12 are held out. Each
