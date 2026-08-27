@@ -34,6 +34,25 @@ def encode_chat(tokenizer, prompt: str, device) -> dict[str, torch.Tensor]:
     return {k: v.to(device) for k, v in encoded.items()}
 
 
+def encode_full_turn(tokenizer, question: str, answer: str, device) -> dict[str, torch.Tensor]:
+    """Encode a *complete* (question, answer) turn -- no generation prompt --
+    for concepts where the contrast lives in the answer rather than the
+    request (deception, non_english). The last token's residual stream then
+    reflects the model having just processed that stated answer, which is
+    what both answer-contrast extraction and the unsteered probe-response
+    readout on generated completions need.
+    """
+    messages = [
+        {"role": "user", "content": question},
+        {"role": "assistant", "content": answer},
+    ]
+    encoded = tokenizer.apply_chat_template(
+        messages, add_generation_prompt=False, return_tensors="pt", return_dict=True,
+        enable_thinking=False,
+    )
+    return {k: v.to(device) for k, v in encoded.items()}
+
+
 def decoder_layer(model, layer_idx: int):
     """hidden_states[l] from output_hidden_states is the residual stream *after*
     decoder block (l-1); hidden_states[0] is the embedding output. So the hook

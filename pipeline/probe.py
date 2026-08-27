@@ -4,6 +4,8 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
 
+from .model import encode_full_turn
+
 
 def _fit_eval(X, y, test_size, seed):
     X_train, X_test, y_train, y_test = train_test_split(
@@ -54,3 +56,17 @@ def shuffle_label_control(pos_acts: dict[int, torch.Tensor], neg_acts: dict[int,
     y_shuffled = np.random.RandomState(seed).permutation(y)
     _, auroc = _fit_eval(X, y_shuffled, test_size, seed)
     return auroc
+
+
+@torch.no_grad()
+def probe_response(model, tokenizer, probe, layer: int, prompt: str, completion: str) -> float:
+    """Unsteered probe readout on a generated (prompt, completion) pair --
+    what a deployed monitor would see. Caller must not have a steering hook
+    registered when this runs: encode_full_turn does a clean forward pass, but
+    a hook left active on `model` would still fire and contaminate the read,
+    since hooks are a property of the model, not of this call.
+    """
+    encoded = encode_full_turn(tokenizer, prompt, completion, model.device)
+    out = model(**encoded, output_hidden_states=True)
+    act = out.hidden_states[layer][0, -1, :].float().cpu().numpy().reshape(1, -1)
+    return float(probe.decision_function(act)[0])
